@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+.npm/
+
+# Build output
+dist/
+build/
+out/
+
+# Logs & OS
+*.log
+npm-debug.log*
+.DS_Store
+
+# Test & cache
+coverage/
+.vite/
+.cache/
+*.tsbuildinfo
