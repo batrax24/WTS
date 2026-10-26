@@ -2,6 +2,10 @@
 
 Prototipo interactivo 3D y de Realidad Mixta (**WebXR `immersive-ar`**) inspirado en el proyecto **WTS (Sistema Wearable de Emergencia)**: un arnés pectoral autónomo con sensores biométricos e inerciales, procesamiento local **TinyML**, **capa térmica flexible con control PWM** y radiobaliza **RF Sub-GHz de 433 MHz** (sin necesidad de internet, red celular ni infraestructura eléctrica externa), junto con el **Receptor del Rescatista**.
 
+![Vista de la nueva edición gráfica del simulador WTS](public/preview-graficos-wts.png)
+
+> **Nueva edición gráfica:** render HDR con bloom, texturas PBR procedurales, ciudad derrumbada detallada, iluminación cinematográfica y HUD rediseñado. [Ver todos los detalles abajo](#edición-gráfica-mejorada-ultra-hd).
+
 ![Esquemático de referencia WTS](public/esquematico-wts.jpg)
 
 ---
