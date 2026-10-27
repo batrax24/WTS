@@ -26,6 +26,17 @@ import {
   buildScenery,
   createBeaconMarker,
 } from './scenery';
+import { WTSXrInput, XrInputStatus } from './xrInput';
+import {
+  JoystickState,
+  NEUTRAL_STATE,
+  SnapTurnController,
+  TURN_RATE_RAD_PER_SEC,
+  VrTurnMode,
+  advanceVrTurnYaw,
+  computeVrWorldTransform,
+} from './joystickMath';
+import { createVrHelpCard } from './vrHelpCard';
 
 export type InspectorPreset = 'ambos' | 'chaleco_frente' | 'chaleco_espalda' | 'receptor';
 
@@ -90,11 +101,28 @@ export class WTSThreeSceneManager {
   // Mobile virtual joystick input
   private touchMove = { forward: 0, strafe: 0, turn: 0 };
 
-  // WebXR Mixed Reality state
+  // Unified joystick input (WebXR thumbsticks + standard Gamepad API)
+  private xrInput: WTSXrInput;
+  private joystickState: JoystickState = NEUTRAL_STATE;
+
+  // WebXR Mixed Reality / Virtual Reality state
   private xrSession: XRSession | null = null;
+  private xrMode: 'ar' | 'vr' | null = null;
+  private vrSupported = false;
+  private arSupported = false;
   private xrHitTestSource: XRHitTestSource | null = null;
   private xrReticle: THREE.Mesh;
   private xrAnchorPlaced = false;
+
+  // VR joystick locomotion: head yaw + accumulated smooth-turn yaw
+  private vrHeadYaw = 0;
+  private vrTurnYaw = 0;
+  private vrTurnMode: VrTurnMode = 'smooth';
+  private snapTurn = new SnapTurnController();
+  private vrHelpCard: THREE.Mesh | null = null;
+  private vrHelpVisible = false;
+  private vrHelpShownAt = 0;
+  private receiverInHand = false;
 
   private raycaster = new THREE.Raycaster();
   private lastFrameTime = performance.now();
@@ -132,6 +160,19 @@ export class WTSThreeSceneManager {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.xr.enabled = true;
     container.appendChild(this.renderer.domElement);
+
+    // One input layer for VR thumbsticks, desktop gamepads and gaze headsets
+    this.xrInput = new WTSXrInput(this.renderer, this.scene, {
+      onOk: () => {
+        if (this.xrMode === 'ar' && !this.xrAnchorPlaced) return;
+        this.callbacks.onReceiverButton('ok');
+      },
+      onPrev: () => this.callbacks.onReceiverButton('prev'),
+      onNext: () => this.callbacks.onReceiverButton('next'),
+      onAudio: () => this.callbacks.onReceiverButton('aux'),
+      onSos: () => this.callbacks.onVestTap(),
+      onHelp: () => this.toggleVrHelp(),
+    });
 
     // Procedural textures + image-based lighting (crisp metal & glass reflections)
     this.dustTexture = createDustTexture();
@@ -291,37 +332,110 @@ export class WTSThreeSceneManager {
   private checkWebXrSupport(): void {
     const navXr = (navigator as Navigator & { xr?: XRSystem }).xr;
     if (!navXr) {
+      this.vrSupported = false;
+      this.arSupported = false;
       this.engine.setXrStatus({ supported: false });
       return;
     }
-    navXr
-      .isSessionSupported('immersive-ar')
-      .then((supported) => {
-        this.engine.setXrStatus({ supported });
-      })
-      .catch(() => {
-        this.engine.setXrStatus({ supported: false });
-      });
+    const probe = async (mode: XRSessionMode): Promise<boolean> => {
+      try {
+        return await navXr.isSessionSupported(mode);
+      } catch {
+        return false;
+      }
+    };
+    void Promise.all([probe('immersive-vr'), probe('immersive-ar')]).then(
+      ([vr, ar]) => {
+        this.vrSupported = vr;
+        this.arSupported = ar;
+        this.engine.setXrStatus({ supported: vr || ar });
+      }
+    );
   }
 
+  /** Immersive-VR: full-scale world, thumbstick locomotion, receiver in hand. */
+  public async startVrSession(): Promise<boolean> {
+    const navXr = (navigator as Navigator & { xr?: XRSystem }).xr;
+    if (!navXr || this.xrSession) return false;
+
+    try {
+      const sessionInit: XRSessionInit = {
+        optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+      };
+      const session = await navXr.requestSession('immersive-vr', sessionInit);
+      this.xrSession = session;
+      this.xrMode = 'vr';
+      this.xrAnchorPlaced = true;
+      this.vrHeadYaw = 0;
+      this.vrTurnYaw = 0;
+      this.snapTurn.reset();
+
+      let refType: XRReferenceSpaceType = 'local';
+      try {
+        await session.requestReferenceSpace('local-floor');
+        refType = 'local-floor';
+      } catch {
+        refType = 'local';
+      }
+      this.renderer.xr.setReferenceSpaceType(refType);
+      this.xrInput.setActive(true, session);
+      session.addEventListener('end', () => this.handleXrSessionEnd());
+      await this.renderer.xr.setSession(session);
+
+      // Full-scale disaster zone (AR uses the 0.032 tabletop scale instead)
+      this.worldGroup.position.set(0, 0, 0);
+      this.worldGroup.rotation.set(0, 0, 0);
+      this.worldGroup.scale.setScalar(1);
+      this.worldGroup.visible = true;
+      this.xrReticle.visible = false;
+      this.scene.background = null;
+      this.scene.fog = new THREE.FogExp2(0x6f6c70, 0.0085);
+      this.skyDome.mesh.visible = true;
+      this.rescuerAvatar.visible = false;
+
+      this.attachReceiverToController();
+      this.attachVrHelpCard();
+
+      this.engine.setMode('rescatista');
+      this.engine.setXrStatus({ active: true, surfacePlaced: true });
+      return true;
+    } catch (error) {
+      console.warn('[WTS] No se pudo iniciar la sesión VR', error);
+      if (this.xrSession) {
+        try {
+          await this.xrSession.end();
+        } catch {
+          // session already gone
+        }
+      }
+      this.xrSession = null;
+      this.xrMode = null;
+      return false;
+    }
+  }
+
+  /** Immersive-AR tabletop maqueta (physical walking, kept as a fallback). */
   public async startMixedReality(domOverlayRoot: HTMLElement): Promise<boolean> {
     const navXr = (navigator as Navigator & { xr?: XRSystem }).xr;
-    if (!navXr) return false;
+    if (!navXr || this.xrSession) return false;
 
     try {
       const sessionInit: XRSessionInit & {
         domOverlay?: { root: HTMLElement };
       } = {
         requiredFeatures: ['hit-test'],
-        optionalFeatures: ['local-floor', 'dom-overlay'],
+        optionalFeatures: ['local-floor', 'dom-overlay', 'hand-tracking'],
         domOverlay: { root: domOverlayRoot },
       };
 
       const session = await navXr.requestSession('immersive-ar', sessionInit);
       this.xrSession = session;
+      this.xrMode = 'ar';
       this.xrAnchorPlaced = false;
 
       this.renderer.xr.setReferenceSpaceType('local');
+      this.xrInput.setActive(true, session);
+      session.addEventListener('end', () => this.handleXrSessionEnd());
       await this.renderer.xr.setSession(session);
 
       const viewerSpace = await session.requestReferenceSpace('viewer');
@@ -349,31 +463,189 @@ export class WTSThreeSceneManager {
         }
       });
 
-      session.addEventListener('end', () => {
-        this.xrSession = null;
-        this.xrHitTestSource = null;
-        this.xrAnchorPlaced = false;
-        this.xrReticle.visible = false;
-        this.worldGroup.position.set(0, 0, 0);
-        this.worldGroup.scale.setScalar(1);
-        this.worldGroup.visible = true;
-        this.scene.background = null;
-        this.scene.fog = new THREE.FogExp2(0x6f6c70, 0.0085);
-        this.skyDome.mesh.visible = true;
-        this.engine.setXrStatus({ active: false, surfacePlaced: false });
-      });
-
       this.engine.setXrStatus({ active: true, surfacePlaced: false });
       return true;
     } catch {
+      this.xrSession = null;
+      this.xrMode = null;
       return false;
     }
+  }
+
+  private handleXrSessionEnd(): void {
+    this.xrSession = null;
+    this.xrHitTestSource = null;
+    this.xrAnchorPlaced = false;
+    this.xrMode = null;
+    this.vrHeadYaw = 0;
+    this.vrTurnYaw = 0;
+    this.xrReticle.visible = false;
+    this.worldGroup.position.set(0, 0, 0);
+    this.worldGroup.rotation.set(0, 0, 0);
+    this.worldGroup.scale.setScalar(1);
+    this.worldGroup.visible = true;
+    this.scene.background = null;
+    this.scene.fog = new THREE.FogExp2(0x6f6c70, 0.0085);
+    this.skyDome.mesh.visible = true;
+    this.rescuerAvatar.visible = true;
+    this.xrInput.setActive(false, null);
+    this.setSkyYaw(0);
+    this.restoreReceiverToCamera();
+    this.detachVrHelpCard();
+    this.engine.setXrStatus({ active: false, surfacePlaced: false });
   }
 
   public async stopMixedReality(): Promise<void> {
     if (this.xrSession) {
       await this.xrSession.end();
     }
+  }
+
+  /* -------------------- VR receiver / help card ------------------- */
+
+  private attachReceiverToController(): void {
+    const root = this.handheldReceiver.root;
+    this.camera.remove(root);
+    this.xrInput.getHandController('right').add(root);
+    root.position.set(0.015, -0.015, -0.12);
+    root.rotation.set(-0.38, 0.12, 0.04);
+    root.scale.setScalar(0.34);
+    root.visible = true;
+    this.receiverInHand = true;
+  }
+
+  private restoreReceiverToCamera(): void {
+    if (!this.receiverInHand) return;
+    const root = this.handheldReceiver.root;
+    root.removeFromParent();
+    this.camera.add(root);
+    root.scale.setScalar(0.68);
+    root.position.set(0.24, -0.2, -0.46);
+    root.rotation.set(-0.14, -0.28, 0.04);
+    root.visible = true;
+    this.receiverInHand = false;
+  }
+
+  private attachVrHelpCard(): void {
+    this.detachVrHelpCard();
+    const card = createVrHelpCard();
+    card.position.set(0, 0.085, -0.16);
+    card.rotation.x = -0.85;
+    this.xrInput.getHandController('left').add(card);
+    this.vrHelpCard = card;
+    this.vrHelpVisible = true;
+    this.vrHelpShownAt = performance.now();
+  }
+
+  private detachVrHelpCard(): void {
+    if (!this.vrHelpCard) return;
+    this.vrHelpCard.removeFromParent();
+    const mat = this.vrHelpCard.material as THREE.MeshBasicMaterial;
+    mat.map?.dispose();
+    mat.dispose();
+    this.vrHelpCard.geometry.dispose();
+    this.vrHelpCard = null;
+    this.vrHelpVisible = false;
+  }
+
+  /** Rotates the procedural sky so stick turning also moves sun/clouds. */
+  private setSkyYaw(yaw: number): void {
+    const material = this.skyDome.mesh.material as THREE.ShaderMaterial;
+    if (material?.uniforms?.uYaw) material.uniforms.uYaw.value = yaw;
+  }
+
+  private toggleVrHelp(): void {
+    this.vrHelpVisible = !this.vrHelpVisible;
+    this.vrHelpShownAt = performance.now();
+  }
+
+  private updateVrHelpFade(nowMs: number): void {
+    if (!this.vrHelpCard) return;
+    const mat = this.vrHelpCard.material as THREE.MeshBasicMaterial;
+    const ageSec = (nowMs - this.vrHelpShownAt) / 1000;
+    const target = this.vrHelpVisible && ageSec < 20 ? 1 : 0;
+    mat.opacity += (target - mat.opacity) * 0.12;
+    if (mat.opacity < 0.01) mat.opacity = 0;
+    this.vrHelpCard.visible = mat.opacity > 0.01;
+  }
+
+  /**
+   * VR locomotion. The headset stays at the XR origin, so we move the world
+   * instead of the camera: a virtual point q is drawn at R(-turn)·(q - p),
+   * which makes the headset pivot exactly on the rescuer position p.
+   * Left stick = head-relative walk, right stick = smooth turn.
+   */
+  private updateVrLocomotion(dt: number, xrFrame: XRFrame): void {
+    const refSpace = this.renderer.xr.getReferenceSpace();
+    const viewerPose = refSpace ? xrFrame.getViewerPose(refSpace) : null;
+    if (viewerPose) {
+      const o = viewerPose.transform.orientation;
+      const euler = new THREE.Euler().setFromQuaternion(
+        new THREE.Quaternion(o.x, o.y, o.z, o.w),
+        'YXZ'
+      );
+      this.vrHeadYaw = -euler.y;
+    }
+
+    const st = this.joystickState;
+    this.vrTurnYaw = advanceVrTurnYaw(
+      this.vrTurnYaw,
+      st.lookX,
+      dt,
+      this.vrTurnMode,
+      this.snapTurn
+    );
+    this.engine.setRescuerHeading(this.vrHeadYaw + this.vrTurnYaw);
+    this.engine.moveRescuer(st.moveY, st.moveX, 0, dt);
+
+    const rescuer = this.engine.getSnapshot().rescuer;
+    const transform = computeVrWorldTransform(
+      rescuer.x,
+      rescuer.z,
+      this.vrTurnYaw
+    );
+    this.worldGroup.rotation.y = transform.rotationY;
+    this.worldGroup.position.set(transform.positionX, 0, transform.positionZ);
+    this.setSkyYaw(-transform.rotationY);
+  }
+
+  /* ------------------------ public status ------------------------- */
+
+  public getXrCapabilities(): {
+    ar: boolean;
+    vr: boolean;
+    active: 'ar' | 'vr' | null;
+    controllers: number;
+    labels: string[];
+    hasGamepad: boolean;
+  } {
+    const status = this.xrInput.getStatus();
+    return {
+      ar: this.arSupported,
+      vr: this.vrSupported,
+      active: this.xrMode,
+      controllers: status.count,
+      labels: status.labels,
+      hasGamepad: status.hasGamepad,
+    };
+  }
+
+  public getJoystickStatus(): XrInputStatus {
+    return this.xrInput.getStatus();
+  }
+
+  public pulseControllers(strength = 0.4, durationMs = 45): void {
+    this.xrInput.pulse(strength, durationMs);
+  }
+
+  /** 'snap' = comfort 30° steps, 'smooth' = continuous rotation. */
+  public setVrTurnMode(mode: VrTurnMode): void {
+    this.vrTurnMode = mode;
+    this.snapTurn.reset();
+  }
+
+  public getVrTurnMode(): VrTurnMode {
+    return this.vrTurnMode;
   }
 
   public setInspectorPreset(preset: InspectorPreset): void {
@@ -916,9 +1188,10 @@ export class WTSThreeSceneManager {
   }
 
   private processInputs(dt: number, snap: SimulationSnapshot): void {
-    let f = this.touchMove.forward;
-    let s = this.touchMove.strafe;
-    let turn = this.touchMove.turn;
+    // Keyboard + virtual joysticks + physical gamepads all feed the same axes
+    let f = this.touchMove.forward + this.joystickState.moveY;
+    let s = this.touchMove.strafe + this.joystickState.moveX;
+    let turn = this.touchMove.turn + this.joystickState.lookX * TURN_RATE_RAD_PER_SEC;
 
     if (this.keysDown.has('KeyW') || this.keysDown.has('ArrowUp')) f += 1;
     if (this.keysDown.has('KeyS') || this.keysDown.has('ArrowDown')) f -= 1;
@@ -932,6 +1205,7 @@ export class WTSThreeSceneManager {
     } else if (snap.mode === 'rescatista' && !snap.xrActive) {
       this.engine.moveRescuer(f, s, turn, dt);
     }
+    // In VR, locomotion is handled by updateVrLocomotion() from the XR pose.
   }
 
   private renderFrame = (nowMs: number, xrFrame?: XRFrame): void => {
@@ -940,42 +1214,49 @@ export class WTSThreeSceneManager {
     const dt = Math.min(0.1, Math.max(0.001, (nowMs - this.lastFrameTime) / 1000));
     this.lastFrameTime = nowMs;
 
+    // Poll VR thumbsticks / desktop gamepads once per frame for every mode
+    this.joystickState = this.xrInput.poll(this.xrSession);
+
     const preSnap = this.engine.getSnapshot();
     this.processInputs(dt, preSnap);
 
-    // Handle WebXR Mixed Reality hit-test & camera pose mapping
+    // Handle WebXR: VR joystick locomotion or AR tabletop placement/pose
     if (xrFrame && this.xrSession) {
-      const refSpace = this.renderer.xr.getReferenceSpace();
-      if (refSpace) {
-        if (!this.xrAnchorPlaced && this.xrHitTestSource) {
-          const hitResults = xrFrame.getHitTestResults(this.xrHitTestSource);
-          if (hitResults.length > 0) {
-            const pose = hitResults[0].getPose(refSpace);
-            if (pose) {
-              this.xrReticle.visible = true;
-              this.xrReticle.matrix.fromArray(pose.transform.matrix);
+      if (this.xrMode === 'vr') {
+        this.updateVrLocomotion(dt, xrFrame);
+      } else {
+        const refSpace = this.renderer.xr.getReferenceSpace();
+        if (refSpace) {
+          if (!this.xrAnchorPlaced && this.xrHitTestSource) {
+            const hitResults = xrFrame.getHitTestResults(this.xrHitTestSource);
+            if (hitResults.length > 0) {
+              const pose = hitResults[0].getPose(refSpace);
+              if (pose) {
+                this.xrReticle.visible = true;
+                this.xrReticle.matrix.fromArray(pose.transform.matrix);
+              }
+            } else {
+              this.xrReticle.visible = false;
             }
-          } else {
-            this.xrReticle.visible = false;
-          }
-        } else if (this.xrAnchorPlaced) {
-          // Convert real-world XR viewer pose into disaster-map coordinates!
-          const viewerPose = xrFrame.getViewerPose(refSpace);
-          if (viewerPose) {
-            const camPos = new THREE.Vector3(
-              viewerPose.transform.position.x,
-              viewerPose.transform.position.y,
-              viewerPose.transform.position.z
-            );
-            const localPos = this.worldGroup.worldToLocal(camPos.clone());
-            const quat = new THREE.Quaternion(
-              viewerPose.transform.orientation.x,
-              viewerPose.transform.orientation.y,
-              viewerPose.transform.orientation.z,
-              viewerPose.transform.orientation.w
-            );
-            const euler = new THREE.Euler().setFromQuaternion(quat, 'YXZ');
-            this.engine.setRescuerPoseFromXR(localPos.x, localPos.z, -euler.y);
+          } else if (this.xrAnchorPlaced) {
+            // Convert real-world XR viewer pose into disaster-map coordinates!
+            const viewerPose = xrFrame.getViewerPose(refSpace);
+            if (viewerPose) {
+              const camPos = new THREE.Vector3(
+                viewerPose.transform.position.x,
+                viewerPose.transform.position.y,
+                viewerPose.transform.position.z
+              );
+              const localPos = this.worldGroup.worldToLocal(camPos.clone());
+              const quat = new THREE.Quaternion(
+                viewerPose.transform.orientation.x,
+                viewerPose.transform.orientation.y,
+                viewerPose.transform.orientation.z,
+                viewerPose.transform.orientation.w
+              );
+              const euler = new THREE.Euler().setFromQuaternion(quat, 'YXZ');
+              this.engine.setRescuerPoseFromXR(localPos.x, localPos.z, -euler.y);
+            }
           }
         }
       }
@@ -987,13 +1268,15 @@ export class WTSThreeSceneManager {
 
     // Global cinematic updates (sky, particles, grading, studio rig)
     const inXR = this.renderer.xr.isPresenting || this.xrSession !== null;
-    const showSky = !inXR && snap.mode !== 'inspector';
+    const showSky =
+      snap.mode !== 'inspector' && (!inXR || this.xrMode === 'vr');
     this.skyDome.mesh.visible = showSky;
     this.skyDome.update(snap.elapsedSec);
     this.scene.background = !inXR && snap.mode === 'inspector' ? this.studioBackground : null;
     this.studioLights.visible = !inXR && snap.mode === 'inspector';
     this.cinematicPass.uniforms.uTime.value = snap.elapsedSec;
     this.scenery.update(snap.elapsedSec, dt);
+    this.updateVrHelpFade(nowMs);
 
     // Update visibility between Disaster World vs Studio Inspector
     if (snap.mode === 'inspector' && !snap.xrActive) {
@@ -1186,6 +1469,8 @@ export class WTSThreeSceneManager {
     this.dustTexture.dispose();
     this.glowTexture.dispose();
     this.smokeTexture.dispose();
+    this.detachVrHelpCard();
+    this.xrInput.dispose();
     if (this.renderer.domElement.parentElement === this.container) {
       this.container.removeChild(this.renderer.domElement);
     }

@@ -1,15 +1,7 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { GameMode } from '../types/wts';
-import {
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
-  HandMetal,
-  RotateCcw,
-  RotateCw,
-  ShieldCheck,
-} from 'lucide-react';
+import { HandMetal, ShieldCheck } from 'lucide-react';
+import { VirtualJoystick } from './VirtualJoystick';
 
 interface MobileTouchControlsProps {
   mode: GameMode;
@@ -19,6 +11,11 @@ interface MobileTouchControlsProps {
   onRescueOk: () => void;
 }
 
+/**
+ * Analogue twin-stick controls for touch screens / XR DOM overlays.
+ * Left stick walks, right stick turns; both feed the same axes as physical
+ * VR thumbsticks and desktop gamepads.
+ */
 export const MobileTouchControls: React.FC<MobileTouchControlsProps> = ({
   mode,
   canRescueNearby,
@@ -26,101 +23,76 @@ export const MobileTouchControls: React.FC<MobileTouchControlsProps> = ({
   onTapSos,
   onRescueOk,
 }) => {
+  const moveRef = useRef({ forward: 0, strafe: 0 });
+  const turnRef = useRef(0);
+  const [moveLabel, setMoveLabel] = useState('');
+
   if (mode === 'inspector') return null;
 
-  const stop = () => onSetMove(0, 0, 0);
+  const push = () => {
+    onSetMove(moveRef.current.forward, moveRef.current.strafe, turnRef.current);
+  };
+
+  const handleMove = (x: number, y: number) => {
+    moveRef.current = { forward: y, strafe: x };
+    setMoveLabel(
+      Math.hypot(x, y) < 0.05
+        ? ''
+        : `${y > 0 ? '▲' : y < 0 ? '▼' : ''}${x > 0 ? '▶' : x < 0 ? '◀' : ''}`
+    );
+    push();
+  };
+
+  const handleTurn = (x: number) => {
+    turnRef.current = x * 2.35;
+    push();
+  };
 
   return (
-    <div className="flex items-end justify-between gap-3 pointer-events-none select-none">
-      {/* Directional D-Pad */}
+    <div className="flex items-end justify-between gap-2 pointer-events-none select-none">
+      {/* Left analogue stick: head-relative movement */}
       <div className="pointer-events-auto bg-slate-900/80 backdrop-blur-md border border-slate-700/80 rounded-2xl p-2 shadow-xl">
-        <div className="text-[9px] text-center font-bold uppercase tracking-wider text-slate-400 mb-1">
-          {mode === 'chaleco' ? 'Moverse (WASD)' : 'Caminar (WASD)'}
-        </div>
-        <div className="grid grid-cols-3 gap-1 w-[114px]">
-          <button
-            type="button"
-            onPointerDown={() => onSetMove(0, 0, -2.0)}
-            onPointerUp={stop}
-            onPointerLeave={stop}
-            title="Girar izquierda (Q / ←)"
-            className="h-9 rounded-lg bg-slate-800 active:bg-sky-500 active:text-slate-950 border border-slate-600 flex items-center justify-center text-slate-200"
-          >
-            <RotateCcw size={14} />
-          </button>
-          <button
-            type="button"
-            onPointerDown={() => onSetMove(1, 0, 0)}
-            onPointerUp={stop}
-            onPointerLeave={stop}
-            title="Avanzar (W / ↑)"
-            className="h-9 rounded-lg bg-slate-800 active:bg-sky-500 active:text-slate-950 border border-slate-600 flex items-center justify-center text-slate-100"
-          >
-            <ArrowUp size={16} />
-          </button>
-          <button
-            type="button"
-            onPointerDown={() => onSetMove(0, 0, 2.0)}
-            onPointerUp={stop}
-            onPointerLeave={stop}
-            title="Girar derecha (→)"
-            className="h-9 rounded-lg bg-slate-800 active:bg-sky-500 active:text-slate-950 border border-slate-600 flex items-center justify-center text-slate-200"
-          >
-            <RotateCw size={14} />
-          </button>
-
-          <button
-            type="button"
-            onPointerDown={() => onSetMove(0, -1, 0)}
-            onPointerUp={stop}
-            onPointerLeave={stop}
-            title="Paso izquierda (A)"
-            className="h-9 rounded-lg bg-slate-800 active:bg-sky-500 active:text-slate-950 border border-slate-600 flex items-center justify-center text-slate-100"
-          >
-            <ArrowLeft size={16} />
-          </button>
-          <button
-            type="button"
-            onPointerDown={() => onSetMove(-1, 0, 0)}
-            onPointerUp={stop}
-            onPointerLeave={stop}
-            title="Retroceder (S / ↓)"
-            className="h-9 rounded-lg bg-slate-800 active:bg-sky-500 active:text-slate-950 border border-slate-600 flex items-center justify-center text-slate-100"
-          >
-            <ArrowDown size={16} />
-          </button>
-          <button
-            type="button"
-            onPointerDown={() => onSetMove(0, 1, 0)}
-            onPointerUp={stop}
-            onPointerLeave={stop}
-            title="Paso derecha (D)"
-            className="h-9 rounded-lg bg-slate-800 active:bg-sky-500 active:text-slate-950 border border-slate-600 flex items-center justify-center text-slate-100"
-          >
-            <ArrowRight size={16} />
-          </button>
+        <VirtualJoystick
+          label={mode === 'chaleco' ? 'MOVERSE' : 'CAMINAR'}
+          hint="WASD / stick izq."
+          size={98}
+          tone="sky"
+          onChange={handleMove}
+        />
+        <div className="h-3 text-center text-[9px] font-bold text-sky-300/80">
+          {moveLabel}
         </div>
       </div>
 
-      {/* Quick Action Button for Mobile/Touch */}
-      <div className="pointer-events-auto">
+      {/* Right side: turn stick + contextual action button */}
+      <div className="pointer-events-auto flex flex-col items-end gap-1.5">
+        <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/80 rounded-2xl p-1.5 shadow-xl">
+          <VirtualJoystick
+            label="GIRAR"
+            axis="x"
+            size={78}
+            tone="amber"
+            onChange={handleTurn}
+          />
+        </div>
+
         {mode === 'chaleco' ? (
           <button
             type="button"
             onClick={onTapSos}
-            className="px-4 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-xs border-2 border-amber-200 shadow-xl flex items-center gap-1.5"
+            className="px-3.5 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-[11px] border-2 border-amber-200 shadow-xl flex items-center gap-1.5"
           >
-            <HandMetal size={16} />
+            <HandMetal size={15} />
             <span>GOLPE SOS</span>
           </button>
         ) : canRescueNearby ? (
           <button
             type="button"
             onClick={onRescueOk}
-            className="px-4 py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-black text-xs border-2 border-emerald-200 shadow-xl flex items-center gap-1.5 animate-bounce"
+            className="px-3.5 py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-black text-[11px] border-2 border-emerald-200 shadow-xl flex items-center gap-1.5 animate-bounce"
           >
-            <ShieldCheck size={17} />
-            <span>¡RESCATAR PERSONA!</span>
+            <ShieldCheck size={16} />
+            <span>¡RESCATAR!</span>
           </button>
         ) : null}
       </div>
