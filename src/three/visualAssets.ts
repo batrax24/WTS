@@ -482,9 +482,18 @@ export function createSmokeTexture(): THREE.CanvasTexture {
 /* -------------------------- sky & lighting ------------------------ */
 
 const SKY_VERT = /* glsl */ `
+  uniform float uYaw;
   varying vec3 vWorldDir;
   void main() {
-    vWorldDir = position;
+    // Optional VR stick-turn yaw: rotate the procedural sky pattern so the
+    // sun and clouds follow the world instead of staying glued to the visor.
+    float c = cos(uYaw);
+    float s = sin(uYaw);
+    vWorldDir = vec3(
+      c * position.x + s * position.z,
+      position.y,
+      -s * position.x + c * position.z
+    );
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mvPosition;
     gl_Position.z = gl_Position.w; // force sky to far plane
@@ -561,6 +570,7 @@ export interface SkyDomeHandle {
 export function createSkyDome(sunDirection: THREE.Vector3): SkyDomeHandle {
   const uniforms = {
     uTime: { value: 0 },
+    uYaw: { value: 0 },
     uSunDir: { value: sunDirection.clone().normalize() },
     uZenith: { value: new THREE.Color(0x243b63) },
     uHorizon: { value: new THREE.Color(0x6d6b76) },

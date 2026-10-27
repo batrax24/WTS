@@ -16,8 +16,10 @@ import {
   SchematicReferenceModal,
   TutorialModal,
 } from './components/TutorialAndModals';
+import { VrControlsModal, XrCapabilitiesView } from './components/VrControlsModal';
 import {
   Clock,
+  Gamepad2,
   Glasses,
   HelpCircle,
   Image as ImageIcon,
@@ -33,6 +35,7 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { GraphicsQuality } from './three/visualAssets';
+import { VrTurnMode } from './three/joystickMath';
 
 export const App: React.FC = () => {
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -56,6 +59,16 @@ export const App: React.FC = () => {
   const [schematicOpen, setSchematicOpen] = useState(false);
   const [outcomeDismissed, setOutcomeDismissed] = useState(false);
   const [xrInfoBanner, setXrInfoBanner] = useState<string | null>(null);
+  const [vrOpen, setVrOpen] = useState(false);
+  const [vrTurnMode, setVrTurnMode] = useState<VrTurnMode>('smooth');
+  const [xrCaps, setXrCaps] = useState<XrCapabilitiesView>({
+    ar: false,
+    vr: false,
+    active: null,
+    controllers: 0,
+    labels: [],
+    hasGamepad: false,
+  });
   const [graphics, setGraphics] = useState<GraphicsQuality>(() =>
     window.innerWidth < 900 || (navigator.hardwareConcurrency ?? 8) <= 4
       ? 'media'
@@ -86,6 +99,7 @@ export const App: React.FC = () => {
       onReceiverButton: (action) => {
         soundRef.current?.unlock();
         manager.pulseReceiverButton3D(action);
+        manager.pulseControllers(action === 'ok' ? 0.75 : 0.28, action === 'ok' ? 95 : 30);
         if (action === 'prev') engine.selectBeaconByDelta(-1);
         else if (action === 'next') engine.selectBeaconByDelta(1);
         else if (action === 'aux') engine.toggleAudioGuide();
@@ -100,6 +114,16 @@ export const App: React.FC = () => {
 
     const syncInterval = window.setInterval(() => {
       setSnap(engine.getSnapshot());
+      setXrCaps(
+        manager.getXrCapabilities() ?? {
+          ar: false,
+          vr: false,
+          active: null,
+          controllers: 0,
+          labels: [],
+          hasGamepad: false,
+        }
+      );
     }, 90);
 
     return () => {
@@ -113,6 +137,10 @@ export const App: React.FC = () => {
     sceneRef.current?.setGraphicsQuality(graphics);
   }, [graphics]);
 
+  useEffect(() => {
+    sceneRef.current?.setVrTurnMode(vrTurnMode);
+  }, [vrTurnMode]);
+
   const cycleGraphics = () => {
     setGraphics((current) =>
       current === 'alta' ? 'media' : current === 'media' ? 'baja' : 'alta'
@@ -121,6 +149,33 @@ export const App: React.FC = () => {
 
   const unlockAudio = () => {
     soundRef.current?.unlock();
+  };
+
+  const handleVrButton = () => {
+    unlockAudio();
+    if (xrCaps.active === 'vr') {
+      void sceneRef.current?.stopMixedReality();
+      return;
+    }
+    setVrOpen(true);
+  };
+
+  const handleStartVr = async () => {
+    setVrOpen(false);
+    const manager = sceneRef.current;
+    if (!manager) return;
+    const ok = await manager.startVrSession();
+    if (!ok) {
+      setXrInfoBanner(
+        'No se pudo iniciar immersive-vr. Puedes seguir jugando con joysticks virtuales, teclado o un mando de PC.'
+      );
+      window.setTimeout(() => setXrInfoBanner(null), 7000);
+    }
+  };
+
+  const handleStopVr = () => {
+    setVrOpen(false);
+    void sceneRef.current?.stopMixedReality();
   };
 
   const handleModeChange = (m: GameMode) => {
@@ -156,7 +211,7 @@ export const App: React.FC = () => {
       return;
     }
 
-    if (snap.xrSupported && overlayRootRef.current) {
+    if (xrCaps.ar && overlayRootRef.current) {
       const ok = await manager.startMixedReality(overlayRootRef.current);
       if (!ok) {
         setXrInfoBanner(
@@ -212,6 +267,22 @@ export const App: React.FC = () => {
       <div className="wts-corner wts-corner--tr" />
       <div className="wts-corner wts-corner--bl" />
       <div className="wts-corner wts-corner--br" />
+
+      {/* Physical controller / gamepad status (VR joysticks) */}
+      {(xrCaps.controllers > 0 || xrCaps.hasGamepad) && (
+        <div className="wts-pad-chip" title="Estado de los mandos / joysticks">
+          <Gamepad2 size={13} />
+          <span>
+            {xrCaps.controllers > 0
+              ? `${xrCaps.controllers} mando${xrCaps.controllers > 1 ? 's' : ''} XR`
+              : 'Mando PC'}
+          </span>
+          <span className="wts-pad-chip__dot" />
+          <span className="wts-pad-chip__detail">
+            {xrCaps.labels[0] ?? 'sticks activos'}
+          </span>
+        </div>
+      )}
 
       {/* Live RF telemetry strip */}
       <div className="wts-rf-strip">
@@ -367,12 +438,30 @@ export const App: React.FC = () => {
           </button>
           <button
             type="button"
+            onClick={handleVrButton}
+            title="Jugar en VR con joysticks · ver mapa de controles"
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1 border transition ${
+              xrCaps.active === 'vr'
+                ? 'bg-emerald-400 text-slate-950 border-emerald-200'
+                : xrCaps.vr
+                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/60 hover:bg-emerald-900'
+                : 'bg-slate-800 text-slate-200 border-slate-600 hover:bg-slate-700'
+            }`}
+          >
+            <Gamepad2 size={14} />
+            <span className="hidden sm:inline">
+              {xrCaps.active === 'vr' ? 'Salir VR' : 'Jugar en VR'}
+            </span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleMixedRealityButton}
             title="Colocar escena en superficie real (WebXR AR) o alternar Vista Maqueta 3D"
             className={`px-2.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1 border transition ${
               snap.xrActive
                 ? 'bg-sky-500 text-slate-950 border-sky-200'
-                : snap.xrSupported
+                : xrCaps.ar
                 ? 'bg-sky-950/90 text-sky-300 border-sky-500/60 hover:bg-sky-900'
                 : 'bg-slate-800 text-slate-200 border-slate-600 hover:bg-slate-700'
             }`}
@@ -381,7 +470,7 @@ export const App: React.FC = () => {
             <span className="hidden sm:inline">
               {snap.xrActive
                 ? 'Salir XR'
-                : snap.xrSupported
+                : xrCaps.ar
                 ? 'Realidad Mixta (AR)'
                 : 'Modo XR / Maqueta'}
             </span>
@@ -715,6 +804,16 @@ export const App: React.FC = () => {
       <SchematicReferenceModal
         open={schematicOpen}
         onClose={() => setSchematicOpen(false)}
+      />
+
+      <VrControlsModal
+        open={vrOpen}
+        onClose={() => setVrOpen(false)}
+        onStartVr={handleStartVr}
+        onStopVr={handleStopVr}
+        caps={xrCaps}
+        turnMode={vrTurnMode}
+        onTurnModeChange={setVrTurnMode}
       />
 
       <MissionOutcomeOverlay

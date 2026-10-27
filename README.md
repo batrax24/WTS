@@ -1,10 +1,12 @@
 # WTS — Juego Interactivo de Realidad Mixta y Rescate Sísmico
 
-Prototipo interactivo 3D y de Realidad Mixta (**WebXR `immersive-ar`**) inspirado en el proyecto **WTS (Sistema Wearable de Emergencia)**: un arnés pectoral autónomo con sensores biométricos e inerciales, procesamiento local **TinyML**, **capa térmica flexible con control PWM** y radiobaliza **RF Sub-GHz de 433 MHz** (sin necesidad de internet, red celular ni infraestructura eléctrica externa), junto con el **Receptor del Rescatista**.
+Prototipo interactivo 3D, de Realidad Virtual (**WebXR `immersive-vr` con joysticks**) y de Realidad Mixta (**`immersive-ar`**) inspirado en el proyecto **WTS (Sistema Wearable de Emergencia)**: un arnés pectoral autónomo con sensores biométricos e inerciales, procesamiento local **TinyML**, **capa térmica flexible con control PWM** y radiobaliza **RF Sub-GHz de 433 MHz** (sin necesidad de internet, red celular ni infraestructura eléctrica externa), junto con el **Receptor del Rescatista**.
 
 ![Vista de la nueva edición gráfica del simulador WTS](public/preview-graficos-wts.png)
 
 > **Nueva edición gráfica:** render HDR con bloom, texturas PBR procedurales, ciudad derrumbada detallada, iluminación cinematográfica y HUD rediseñado. [Ver todos los detalles abajo](#edición-gráfica-mejorada-ultra-hd).
+>
+> **Controles VR con joystick:** entra en `immersive-vr` desde el botón **Jugar en VR**, camina con el stick izquierdo y gira con el derecho. [Ver mapa de controles](#controles-con-joystick-para-vr).
 
 ![Esquemático de referencia WTS](public/esquematico-wts.jpg)
 
@@ -33,8 +35,38 @@ Prototipo interactivo 3D y de Realidad Mixta (**WebXR `immersive-ar`**) inspirad
 7. **Hipotermia simulada y Capa Térmica Flexible PWM**: animación del circuito calefactor serpentino encendido por pulsos (**PWM**), estabilización y recuperación gradual de la temperatura, incremento medible de consumo (`mW`) y recorte automático a modo ahorro cuando la batería es baja.
 
 ### 3. Realidad Mixta (WebXR) y Adaptabilidad PC / Móvil
-- **Con soporte WebXR (`immersive-ar` + `hit-test`)**: coloca la maqueta del terremoto sobre una mesa o suelo real mediante cámara AR y desplázate físicamente alrededor de los edificios para buscar señales de 433 MHz.
-- **Sin cámara o sin WebXR**: versión 3D completa directamente en navegador con vista en primera persona (receptor 3D en mano) y **Vista Maqueta Espacial**, adaptable a computador (teclado + ratón) y móvil (cruceta táctil y paneles plegables).
+- **Con visor VR (`immersive-vr`)**: juega a escala real dentro de la zona de desastre con locomoción por **joysticks**, giro suave o por pasos, receptor 3D en la mano derecha, láseres de puntería y tarjeta de ayuda flotante. [Controles completos abajo](#controles-con-joystick-para-vr).
+- **Con soporte WebXR AR (`immersive-ar` + `hit-test`)**: coloca la maqueta del terremoto sobre una mesa o suelo real mediante cámara AR y desplázate físicamente alrededor de los edificios para buscar señales de 433 MHz.
+- **Sin cámara o sin WebXR**: versión 3D completa directamente en navegador con vista en primera persona (receptor 3D en mano) y **Vista Maqueta Espacial**, adaptable a computador (teclado + ratón + mando de PC), móvil (joysticks analógicos táctiles y paneles plegables) y visores sin mandos (mirada + botón).
+
+---
+
+## Controles con Joystick para VR
+
+Desde la barra superior, pulsa **🎮 Jugar en VR**. Se abrirá un panel con el mapa de controles, el estado de los mandos detectados y el botón **Entrar a VR** (`immersive-vr`). La simulación WTS (RF 433 MHz, RSSI, chaleco, rescatista e inspector) es exactamente la misma: solo cambia la forma de moverte.
+
+| Control VR | Acción |
+| --- | --- |
+| **Joystick izquierdo** | Caminar en la dirección que miras; el eje horizontal te desplaza lateralmente (*strafe*). Velocidad proporcional a la deflexión. |
+| **Joystick derecho** | Girar. Modo **SUAVE** (continuo, 2.35 rad/s) o **POR PASOS** (30° por pulsación, recomendado si te mareas). Se cambia en el panel de controles VR. |
+| **Gatillo / A** | `OK`: confirmar localización y rescatar al superviviente cercano. |
+| **A / X** y **B / Y** (o D-pad) | Baliza **siguiente** / **anterior** en el receptor 433 MHz. |
+| **Grip / empuñadura** | Activar o desactivar la **guía acústica RF**. |
+| **Presionar el stick** (o D-pad arriba) | Mostrar / ocultar la tarjeta de ayuda 3D de la muñeca izquierda. |
+| **Touchpad / D-pad abajo** | Golpe SOS (Modo Chaleco). |
+| **Sin mandos (Cardboard / mirada)** | Mantén pulsado el botón del visor y mira en la dirección en la que quieras avanzar. |
+| **PC sin visor** | Cualquier mando conectado por la **Gamepad API** usa el mismo mapa de controles. |
+
+Detalles de implementación:
+
+- **Zona muerta** configurable (0.16 por defecto) con reescalado suave; se evita el *drift* del stick y se normaliza la velocidad en diagonales.
+- **Perfiles XR**: los mandos Meta/Quest/Index/Valve leen el par de ejes del thumbstick (último par) con respaldo al touchpad; el resto usa el estándar `axes[0..3]`.
+- **Botones por flanco de subida** (edge detection) para que una pulsación mantenida no repita acciones; **vibración háptica** breve en cada pulsación y en los rescates.
+- **Locomoción head-relative**: el visor permanece en el origen XR y es el mundo el que se desplaza/rota, calculado con `computeVrWorldTransform()` para que la posición del rescatista coincida siempre con la del jugador. La rotación real de la cabeza se respeta en todo momento y no es sobrescrita por el mapeo de pose de la maqueta AR.
+- **Ayuda dentro del visor**: panel 3D con textura de canvas anclado al mando izquierdo y láseres de puntería en ambos mandos.
+- **Fallback sin XR**: joysticks virtuales analógicos en pantalla, teclado WASD/flechas y mandos de PC siguen funcionando. El botón de AR/`immersive-ar` y la Vista Maqueta se mantienen intactos.
+
+> WebXR requiere **HTTPS** (o reenvío de puertos `localhost` en móvil) y un navegador compatible con `immersive-vr`. Si el visor no está disponible, el panel muestra «VR no disponible» y puedes seguir jugando con los otros controles.
 
 ---
 
@@ -84,12 +116,13 @@ npm run dev
 ```
 Abre en tu navegador la URL mostrada en consola (por defecto `http://localhost:5173`).
 
-> **Nota para Realidad Mixta (WebXR AR) en móvil**: los navegadores móviles (p. ej. Chrome en Android compatible con ARCore) requieren contexto seguro (`https://` o reenvío de puertos `localhost` mediante `chrome://inspect`) para habilitar `navigator.xr.requestSession('immersive-ar')`. Si no está disponible, el juego ofrece automáticamente el modo 3D completo en navegador.
+> **Nota para WebXR (VR y AR)**: los navegadores requieren contexto seguro (`https://` o reenvío de puertos `localhost` mediante `chrome://inspect`) para habilitar `navigator.xr.requestSession('immersive-vr' | 'immersive-ar')`. En visores autónomos (Meta Quest, Pico, etc.) abre la URL HTTPS directamente en el navegador del visor. Si XR no está disponible, el juego ofrece automáticamente el modo 3D completo en navegador.
 
-### 3. Ejecutar pruebas automatizadas del motor de simulación
+### 3. Ejecutar pruebas automatizadas (simulación, joysticks VR e interfaz)
 ```bash
 npm test
 ```
+Incluye 35 pruebas: motor de simulación WTS, matemática de joysticks y locomoción VR, capa de entrada WebXR/Gamepad (simulada sin GPU) y pruebas de integración de la interfaz con `jsdom` + Testing Library.
 
 ### 4. Compilar para producción
 ```bash
@@ -108,16 +141,18 @@ El repositorio incluye el flujo `.github/workflows/deploy.yml` para compilar y p
 
 ## Controles Rápidos
 
-| Acción | Computador (Teclado y Ratón) | Móvil / Pantalla Táctil |
-| --- | --- | --- |
-| Moverse | `W`, `A`, `S`, `D` o Flechas `↑` `↓` | Cruceta táctil en esquina inferior izquierda |
-| Mirar / Orbitar cámara 3D | Arrastrar con el ratón (`clic + mover`) / Rueda para zoom | Arrastrar sobre la escena 3D + botones `↺` / `↻` |
+| Acción | Computador (Teclado y Ratón) | Móvil / Pantalla Táctil | VR / Mando |
+| --- | --- | --- | --- |
+| Moverse | `W`, `A`, `S`, `D` o Flechas `↑` `↓` | Joystick analógico izquierdo | Stick izquierdo |
+| Girar / mirar | Flechas `←` `→` o arrastrar con el ratón | Joystick analógico derecho | Stick derecho o girar la cabeza |
+| Entrar en VR | Botón **🎮 Jugar en VR** → **Entrar a VR** | — | Botón del visor / navegador XR |
 | Golpes rítmicos SOS (Modo Chaleco) | Tecla `Espacio` / `T`, botón **GOLPEAR ARNÉS SOS** o clic sobre el chaleco 3D | Botón táctil **GOLPE SOS** o tocar el chaleco 3D |
 | Cambiar de baliza en el Receptor | Botones `◀` / `▶`, pestañas `#014..#032` o teclas `Z` / `X` | Tocar `◀` / `▶` o pestañas superiores del receptor |
 | Confirmar localización / Rescatar | Botón **`OK`** en el receptor o teclas `E` / `Enter` al estar cerca (< 4.6 m) | Botón **`OK`** o botón emergente **¡RESCATAR PERSONA!** |
 | Activar eventos del escenario | **Panel de Situaciones y Eventos WTS** (Frío, Inmovilidad, Golpes SOS, Señal débil, Batería baja, Sin sensor) | Pestaña **Situaciones** |
 | Cambiar calidad gráfica (Ultra / Alta / Eco) | Botón **✦ Ultra / Alta / Eco** en la barra superior | Ícono de chispas en la barra superior |
-| Ocultar / mostrar interfaz (modo cine) | Botón del **ojo** en la barra superior | Botón del **ojo** |
+| Ocultar / mostrar interfaz (modo cine) | Botón del **ojo** en la barra superior | Botón del **ojo** | — |
+| Cambiar de baliza / guía acústica / ayuda (VR) | Mando de PC: D-pad / gatillos / grip | — | A-X, B-Y, grip, presionar stick |
 
 ---
 
@@ -132,5 +167,11 @@ El repositorio incluye el flujo `.github/workflows/deploy.yml` para compilar y p
 - `src/three/` — Modelos 3D procedurales fieles al boceto (`vestModel.ts`, `receiverModel.ts`), gestor de escena 3D + WebXR (`disasterScene.ts`) y el nuevo sistema visual:
   - `visualAssets.ts` — Texturas PBR procedurales, cielo shader, entorno PMREM, sprites y shader de grado cinematográfico.
   - `scenery.ts` — Ciudad derrumbada, escombros, base de mando, mobiliario urbano, atmósfera de partículas y marcadores de baliza.
+  - `joystickMath.ts` — Matemática pura de joysticks: zona muerta, perfiles XR, detección de flancos de botón, giro suave/por pasos y transformación de locomoción VR (con pruebas unitarias).
+  - `xrInput.ts` — Capa unificada `WTSXrInput`: mandos WebXR, Gamepad API, vibración háptica, láseres y fallback de mirada.
+  - `vrHelpCard.ts` — Tarjeta de ayuda 3D (textura canvas) anclada al mando izquierdo.
 - `src/audio/soundEngine.ts` — Sintetizador procedural Web Audio API sin dependencias de archivos externos.
-- `src/components/` — Interfaz reactiva en español (Receptor interactivo, Telemetría del Chaleco, Panel de Situaciones, Inspector 3D, Controles Táctiles y Tutorial).
+- `src/components/` — Interfaz reactiva en español (Receptor interactivo, Telemetría del Chaleco, Panel de Situaciones, Inspector 3D, `VirtualJoystick`, `VrControlsModal`, Controles Táctiles y Tutorial).
+- `src/three/__tests__/joystickMath.test.ts` — Pruebas unitarias de zona muerta, sticks, botones, giro suave/por pasos y transformación de mundo XR.
+- `src/three/__tests__/xrInput.test.ts` — Mapeo de sticks izquierdo/derecho, flancos de botón, hápticos y fallback de mirada sin GPU.
+- `src/__tests__/vrControls.ui.test.tsx` — Integración con `jsdom`: botón VR, panel de controles, modos de giro y joysticks virtuales.

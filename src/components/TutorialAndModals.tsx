@@ -5,6 +5,7 @@ import {
   Clock,
   Cpu,
   Flame,
+  Gamepad2,
   HelpCircle,
   Image as ImageIcon,
   Radio,
@@ -44,7 +45,14 @@ const TUTORIAL_STEPS = [
     icon: CheckCircle2,
     body: 'Cuando logres 4–5 barras RSSI y te acerques al hueco estructural (<4.5 m), el botón OK brillará para completar el rescate. En cualquier momento abre el Inspector 3D para girar ambos dispositivos y pulsar sus partes, o activa Realidad Mixta (WebXR) si tu dispositivo dispone de AR.',
     highlight:
-      'Controles rápidos: WASD / Flechas o cruceta táctil para moverse · Ratón arrastrar para mirar/girar · Espacio = Golpe SOS · E / Enter = Botón OK.',
+      'Controles rápidos: WASD / Flechas o joysticks virtuales para moverse · Ratón arrastrar para mirar/girar · Espacio = Golpe SOS · E / Enter = Botón OK. También puedes conectar un mando de PC.',
+  },
+  {
+    title: '5. Jugar en VR con joysticks',
+    icon: Gamepad2,
+    body: 'Pulsa «Jugar en VR» para entrar en immersive-vr a escala real. El joystick izquierdo camina hacia donde miras, el derecho gira (suave o por pasos de 30°), el receptor va en tu mano derecha y una tarjeta de ayuda flota en la muñeca izquierda. Gatillo/A = OK, A/X y B/Y cambian de baliza, grip activa la guía acústica y presionar el stick muestra la ayuda.',
+    highlight:
+      'Si usas Cardboard sin mandos, mantén pulsado el botón del visor y mira hacia donde quieras avanzar. Todo WebXR requiere HTTPS o localhost; sin visor puedes seguir con teclado, joysticks táctiles o un mando de PC.',
   },
 ];
 
